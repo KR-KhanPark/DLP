@@ -1,77 +1,106 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using DLP.Player.Abilities;
 
 [RequireComponent(typeof(Rigidbody))]
 public class PlayerController : MonoBehaviour
 {
     [Header("Movement")]
-    [SerializeField] private float moveSpeed = 6f;
-    [SerializeField] private float jumpForce = 7f;
+    [SerializeField] private float maxSpeed = 6f;
+
+    // 지상에서 목표 속도까지 가속/감속하는 “가속도” 개념 (단위: m/s^2 느낌)
+    [SerializeField] private float groundAcceleration = 40f;
+    [SerializeField] private float groundDeceleration = 55f;
+
+    // 공중 제어는 보통 약하게(관성 느낌을 주기 위해)
+    [Range(0f, 1f)]
+    [SerializeField] private float airControl = 0.6f;
 
     [Header("Ground Check")]
     [SerializeField] private Transform groundCheckOrigin;
     [SerializeField] private float groundCheckRadius = 0.2f;
     [SerializeField] private LayerMask groundMask;
 
-    private Rigidbody rb;
+    [Header("Ability System")]
+    [SerializeField] private AbilityRunner abilityRunner;
 
-    // New Input System에서 Move는 Vector2로 들어오므로 저장해두고 물리에서 사용
+    private Rigidbody rb;
     private Vector2 moveInput;
-    // 점프는 "눌림"을 1회 처리하기 위해 bool 래치
-    private bool jumpPressed;
+    private bool jumpHeld; // 점프 버튼을 누르고 있는지(짧은 점프/긴 점프)
 
     private void Awake()
     {
         rb = GetComponent<Rigidbody>();
+        
+        if (abilityRunner == null)
+            abilityRunner = GetComponent<AbilityRunner>();
+
+        if (abilityRunner != null)
+        {
+            var ctx = new AbilityContext(rb, groundCheckOrigin, groundCheckRadius, groundMask);
+            abilityRunner.Initialize(ctx);
+        }
     }
 
-    /// <summary>
-    /// PlayerInput(Invoke Unity Events)에서 Move 액션이 호출될 때 들어오는 콜백.
-    /// - context.ReadValue<Vector2>()는 (x,y) 입력 값을 가져옴
-    /// - 우리는 2.5D라 x만 사용
-    /// </summary>
+    // New Input System 이벤트 콜백
     public void OnMove(InputAction.CallbackContext context)
     {
         moveInput = context.ReadValue<Vector2>();
+
+        abilityRunner?.ForwardMoveInput(moveInput);
     }
 
-    /// <summary>
-    /// Jump 액션 콜백. performed는 "버튼이 눌린 순간"에 true가 됨.
-    /// </summary>
     public void OnJump(InputAction.CallbackContext context)
     {
+        // 버튼이 눌린 순간
         if (context.performed)
-            jumpPressed = true;
+        {
+            abilityRunner?.ForwardJumpPressed();
+        }
+
+        // 버튼을 누르고 있는 동안/뗐을 때 상태 추적
+        // context.ReadValueAsButton()은 누르고 있으면 true
+        jumpHeld = context.ReadValueAsButton();
+
+        abilityRunner?.ForwardJumpHeld(jumpHeld);
     }
 
     private void FixedUpdate()
     {
-        // ===== 이동 =====
-        // linearVelocity의 x만 갱신하고 y는 중력/점프에 맡김
+        bool grounded = IsGrounded();
+
+        ApplyHorizontalMovement(grounded);
+    }
+
+    private void ApplyHorizontalMovement(bool grounded)
+    {
+        // 목표 속도: 입력 x * 최대속도
+        float targetX = moveInput.x * maxSpeed;
+
+        // 현재 속도
         Vector3 v = rb.linearVelocity;
-        v.x = moveInput.x * moveSpeed;
+
+        // 지상/공중 가속도 설정
+        // 공중은 airControl만큼만 반영해서 관성 느낌 유지
+        float accel = grounded ? groundAcceleration : groundAcceleration * airControl;
+        float decel = grounded ? groundDeceleration : groundDeceleration * airControl;
+
+        // 입력이 있을 땐 가속, 입력이 없으면 감속(마찰 느낌)
+        float rate = Mathf.Abs(targetX) > 0.01f ? accel : decel;
+
+        // 현재 속도를 목표 속도로 서서히 이동 → “관성”
+        v.x = Mathf.MoveTowards(v.x, targetX, rate * Time.fixedDeltaTime);
+
         rb.linearVelocity = v;
-
-        // ===== 점프 =====
-        if (!jumpPressed) return;
-        jumpPressed = false;
-
-        if (!IsGrounded()) return;
-
-        // 점프 높이를 일정하게 만들기 위해 y속도 리셋 후 임펄스
-        Vector3 vel = rb.linearVelocity;
-        vel.y = 0f;
-        rb.linearVelocity = vel;
-
-        rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
     }
 
     private bool IsGrounded()
     {
-        if (groundCheckOrigin == null)
-            return Physics.CheckSphere(transform.position + Vector3.down * 0.9f, groundCheckRadius, groundMask);
+        Vector3 pos = groundCheckOrigin != null
+            ? groundCheckOrigin.position
+            : transform.position + Vector3.down * 0.9f;
 
-        return Physics.CheckSphere(groundCheckOrigin.position, groundCheckRadius, groundMask);
+        return Physics.CheckSphere(pos, groundCheckRadius, groundMask);
     }
 
 #if UNITY_EDITOR
