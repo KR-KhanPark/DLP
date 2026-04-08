@@ -6,12 +6,9 @@ namespace DLP.Player.Abilities
     {
         public int Priority => 0;
 
-        [Header("Jump Counts")]
-        [SerializeField] private int maxJumpCount = 2;
-
-        [Header("Jump Impulse")]
+        [Header("Jump Power")]
         [SerializeField] private float firstJumpImpulse = 7.5f;
-        [SerializeField] private float secondJumpImpulse = 5.8f;
+        [SerializeField] private float airJumpTargetYSpeed = 4.5f;
 
         [Header("Short Jump (Release Cut)")]
         [SerializeField, Range(0.1f, 0.9f)]
@@ -23,87 +20,111 @@ namespace DLP.Player.Abilities
 
         private AbilityContext _ctx;
 
-        private int _jumpCount;
-        private bool _jumpPressed;
+        private bool _jumpQueued;
         private bool _jumpHeld;
-        private bool _jumpReleased; // 릴리즈 순간을 잡기 위해 추가
+        private bool _jumpReleasedThisFrame;
+
+        // 첫 점프에만 숏점프 허용
+        private bool _canApplyJumpCut;
+
+        private bool _wasGrounded;
+
+        // 바닥에서 출발한 뒤 공중 추가점프 1회만 허용
+        private bool _airJumpAvailable;
 
         public void Initialize(AbilityContext ctx)
         {
             _ctx = ctx;
-            _jumpCount = 0;
-            _jumpPressed = false;
+
+            _jumpQueued = false;
             _jumpHeld = false;
-            _jumpReleased = false;
+            _jumpReleasedThisFrame = false;
+            _canApplyJumpCut = false;
+
+            _wasGrounded = _ctx.IsGrounded();
+            _airJumpAvailable = true;
         }
 
         public void OnUpdate()
         {
-            if (_ctx.IsGrounded())
-                _jumpCount = 0;
+            bool isGrounded = _ctx.IsGrounded();
+
+            // 착지한 순간 리셋
+            if (isGrounded && !_wasGrounded)
+            {
+                _airJumpAvailable = true;
+                _canApplyJumpCut = false;
+                _jumpReleasedThisFrame = false;
+            }
+
+            _wasGrounded = isGrounded;
         }
 
         public void OnFixedUpdate()
         {
             HandleJump();
-            ApplyJumpCut();     // 1단 점프만 숏점프 처리
-            ApplyBetterFall();  // 낙하만 가속
+            ApplyJumpCut();
+            ApplyBetterFall();
         }
 
         private void HandleJump()
         {
-            if (!_jumpPressed) return;
-            _jumpPressed = false;
+            if (!_jumpQueued)
+                return;
 
-            if (_jumpCount >= maxJumpCount) return;
+            _jumpQueued = false;
 
-            bool isFirstJump = (_jumpCount == 0);
-            float impulse = isFirstJump ? firstJumpImpulse : secondJumpImpulse;
-
+            bool isGrounded = _ctx.IsGrounded();
             Vector3 v = _ctx.Rb.linearVelocity;
 
-            // 1단 점프: 일관성 위해 y=0
-            if (isFirstJump)
+            if (isGrounded)
             {
+                // 첫 점프
                 v.y = 0f;
                 _ctx.Rb.linearVelocity = v;
+
+                _ctx.Rb.AddForce(Vector3.up * firstJumpImpulse, ForceMode.Impulse);
+
+                _canApplyJumpCut = true;
+                _jumpReleasedThisFrame = false;
+                return;
             }
-            else
+
+            if (_airJumpAvailable)
             {
-                // 2단 점프: 보조 점프 느낌
-                // "첫 점프 재실행" 느낌 줄이기 위해 y를 완전 리셋하지 않고,
-                // 내려가는 중일 때만 바닥감 제거용으로 0으로 끌어올림
-                if (v.y < 0f)
+                // 공중 추가점프 1회
+                float currentY = v.y;
+                float neededBoost = airJumpTargetYSpeed - currentY;
+
+                if (neededBoost > 0f)
                 {
-                    v.y = 0f;
-                    _ctx.Rb.linearVelocity = v;
+                    _ctx.Rb.AddForce(Vector3.up * neededBoost, ForceMode.VelocityChange);
                 }
+
+                _airJumpAvailable = false;
+                _canApplyJumpCut = false;
+                _jumpReleasedThisFrame = false;
             }
-
-            _ctx.Rb.AddForce(Vector3.up * impulse, ForceMode.Impulse);
-
-            _jumpCount++;
-            _jumpReleased = false; // 점프 시작 시 릴리즈 플래그 초기화
         }
 
         private void ApplyJumpCut()
         {
-            // 첫 점프에서만 적용 (2단 점프는 고정 높이)
-            if (_jumpCount != 1) { _jumpReleased = false; return; }
+            if (!_canApplyJumpCut)
+                return;
 
-            // 릴리즈 순간(held가 true → false로 바뀐 프레임)에서만 컷
-            if (!_jumpReleased) return;
+            if (!_jumpReleasedThisFrame)
+                return;
 
             Vector3 v = _ctx.Rb.linearVelocity;
 
-            // 상승 중일 때만 컷 (이미 떨어지는 중이면 손대지 않음)
             if (v.y > 0f)
             {
                 v.y *= jumpCutMultiplier;
                 _ctx.Rb.linearVelocity = v;
             }
 
-            _jumpReleased = false;
+            _jumpReleasedThisFrame = false;
+            _canApplyJumpCut = false;
         }
 
         private void ApplyBetterFall()
@@ -112,7 +133,10 @@ namespace DLP.Player.Abilities
 
             if (v.y < 0f)
             {
-                _ctx.Rb.AddForce(Physics.gravity * (fallGravityMultiplier - 1f), ForceMode.Acceleration);
+                _ctx.Rb.AddForce(
+                    Physics.gravity * (fallGravityMultiplier - 1f),
+                    ForceMode.Acceleration
+                );
             }
         }
 
@@ -120,15 +144,19 @@ namespace DLP.Player.Abilities
 
         public bool OnJumpPressed()
         {
-            _jumpPressed = true;
+            bool isGrounded = _ctx.IsGrounded();
+
+            if (!isGrounded && !_airJumpAvailable)
+                return false;
+
+            _jumpQueued = true;
             return true;
         }
 
         public void OnJumpHeld(bool held)
         {
-            // held가 true → false로 바뀌는 순간을 기록
             if (_jumpHeld && !held)
-                _jumpReleased = true;
+                _jumpReleasedThisFrame = true;
 
             _jumpHeld = held;
         }

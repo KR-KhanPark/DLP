@@ -21,12 +21,25 @@ public class PlayerController : MonoBehaviour
     [SerializeField] private float groundCheckRadius = 0.2f;
     [SerializeField] private LayerMask groundMask;
 
+    [Header("Wall Check")]
+    [SerializeField] private Transform wallCheckLeft;
+    [SerializeField] private Transform wallCheckRight;
+    [SerializeField] private float wallCheckRadius = 0.15f;
+    [SerializeField] private LayerMask wallMask;
+
     [Header("Ability System")]
     [SerializeField] private AbilityRunner abilityRunner;
+
+    [Header("Respawn")]
+    [SerializeField] private Transform respawnPoint;
+    [SerializeField] private float fallRespawnY = -10f;
 
     private Rigidbody rb;
     private Vector2 moveInput;
     private bool jumpHeld; // 점프 버튼을 누르고 있는지(짧은 점프/긴 점프)
+
+    private float horizontalControlLockTimer;
+    private float forcedMoveInputX;
 
     private void Awake()
     {
@@ -37,8 +50,26 @@ public class PlayerController : MonoBehaviour
 
         if (abilityRunner != null)
         {
-            var ctx = new AbilityContext(rb, groundCheckOrigin, groundCheckRadius, groundMask);
+            var ctx = new AbilityContext(
+                rb,
+                groundCheckOrigin,
+                groundCheckRadius,
+                groundMask,
+                wallCheckLeft,
+                wallCheckRight,
+                wallCheckRadius,
+                wallMask
+            );
+
             abilityRunner.Initialize(ctx);
+        }
+    }
+
+    private void Update()
+    {
+        if (transform.position.y < fallRespawnY)
+        {
+            Respawn();
         }
     }
 
@@ -69,13 +100,16 @@ public class PlayerController : MonoBehaviour
     {
         bool grounded = IsGrounded();
 
+        if (horizontalControlLockTimer > 0f)
+            horizontalControlLockTimer -= Time.fixedDeltaTime;
+
         ApplyHorizontalMovement(grounded);
     }
 
     private void ApplyHorizontalMovement(bool grounded)
     {
-        // 목표 속도: 입력 x * 최대속도
-        float targetX = moveInput.x * maxSpeed;
+        float inputX = horizontalControlLockTimer > 0f ? forcedMoveInputX : moveInput.x;
+        float targetX = inputX * maxSpeed;
 
         // 현재 속도
         Vector3 v = rb.linearVelocity;
@@ -102,6 +136,11 @@ public class PlayerController : MonoBehaviour
 
         return Physics.CheckSphere(pos, groundCheckRadius, groundMask);
     }
+    public void LockHorizontalControl(float duration, float forcedInputX)
+    {
+        horizontalControlLockTimer = duration;
+        forcedMoveInputX = Mathf.Clamp(forcedInputX, -1f, 1f);
+    }
 
 #if UNITY_EDITOR
     private void OnDrawGizmosSelected()
@@ -111,4 +150,11 @@ public class PlayerController : MonoBehaviour
         Gizmos.DrawWireSphere(pos, groundCheckRadius);
     }
 #endif
+    private void Respawn()
+    {
+        Vector3 targetPosition = respawnPoint != null ? respawnPoint.position : Vector3.zero;
+
+        rb.linearVelocity = Vector3.zero;
+        transform.position = targetPosition;
+    }
 }

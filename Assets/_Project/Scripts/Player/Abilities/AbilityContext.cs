@@ -9,18 +9,61 @@ namespace DLP.Player.Abilities
         public float GroundCheckRadius { get; }
         public LayerMask GroundMask { get; }
 
-        public AbilityContext(Rigidbody rb, Transform groundCheckOrigin, float groundCheckRadius, LayerMask groundMask)
+        public Transform WallCheckLeft { get; }
+        public Transform WallCheckRight { get; }
+        public float WallCheckRadius { get; }
+        public LayerMask WallMask { get; }
+
+        public AbilityContext(
+            Rigidbody rb,
+            Transform groundCheckOrigin,
+            float groundCheckRadius,
+            LayerMask groundMask,
+            Transform wallCheckLeft,
+            Transform wallCheckRight,
+            float wallCheckRadius,
+            LayerMask wallMask)
         {
             Rb = rb;
             GroundCheckOrigin = groundCheckOrigin;
             GroundCheckRadius = groundCheckRadius;
             GroundMask = groundMask;
+
+            WallCheckLeft = wallCheckLeft;
+            WallCheckRight = wallCheckRight;
+            WallCheckRadius = wallCheckRadius;
+            WallMask = wallMask;
         }
 
         public bool IsGrounded()
         {
-            var pos = GroundCheckOrigin != null ? GroundCheckOrigin.position : (Rb.transform.position + Vector3.down * 0.9f);
-            return Physics.CheckSphere(pos, GroundCheckRadius, GroundMask);
+            Vector3 origin = GroundCheckOrigin != null
+                ? GroundCheckOrigin.position
+                : (Rb.transform.position + Vector3.down * 0.9f);
+
+            return Physics.CheckSphere(GroundCheckOrigin.position, GroundCheckRadius, GroundMask);
+        }
+
+        public bool IsTouchingLeftWall()
+        {
+            if (WallCheckLeft == null) return false;
+
+            return Physics.CheckSphere(
+                WallCheckLeft.position,
+                WallCheckRadius,
+                WallMask
+            );
+        }
+
+        public bool IsTouchingRightWall()
+        {
+            if (WallCheckRight == null) return false;
+
+            return Physics.CheckSphere(
+                WallCheckRight.position,
+                WallCheckRadius,
+                WallMask
+            );
         }
     }
 }
